@@ -33,11 +33,23 @@ Wizard Wrapper (ERC20ToERC7984Wrapper):  ❌ 404 Object not found
 PiggyBank Wrapper (Nox.add/sub):         ✅ 500.0 — instant decrypt
 ```
 
-## Root Cause
+## Root Cause (confirmed via Nox Nexus at dev.noxprotocol.io)
 
-`ERC7984Base._update()` uses `Nox.safeAdd()` + `Nox.select()` which create chained computation handles. The Nox Runner does not process these — the ciphertext is never stored in the Handle Gateway.
+`ERC7984Base._update()` passes **uninitialized balance handles** (typed zero handles like `0x0000066eee230000...000`) as inputs to `Nox.add()` / `Nox.safeAdd()`. The Runner **cannot resolve typed zero handles** — they have no operator, no transaction, no plaintext. This blocks the ENTIRE computation chain.
 
-`Nox.add()` / `Nox.sub()` produce handles the Runner processes instantly.
+**Traced via Nexus:**
+```
+Add (UNRESOLVED) ← final balance handle
+  ├── Zero Handle 0x0000066eee230000...000 (UNRESOLVED) ← PATIENT ZERO
+  └── Select (UNRESOLVED)
+        ├── SafeAdd (UNRESOLVED)
+        ├── WrapAsPublicHandle (RESOLVED) ← Nox.toEuint256(amount)
+        └── WrapAsPublicHandle (RESOLVED) ← Nox.toEuint256(0)
+```
+
+**The fix:** Initialize `_balances[to]` with `Nox.toEuint256(0)` (creates a resolved `WrapAsPublicHandle`) BEFORE using it in computations. This is what our PiggyWrapper does and why it works.
+
+**v0.1.0 removed `isInitialized` guards** assuming the SDK resolves null handles, but the Runner does NOT resolve typed zero handles. This is the regression.
 
 ## Contracts
 
